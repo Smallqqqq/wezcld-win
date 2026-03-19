@@ -8,7 +8,7 @@ param(
     [switch]$Uninstall
 )
 
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "Continue"
 
 $REPO     = "Smallqqqq/wezcld-win"
 $BASE_URL = "https://raw.githubusercontent.com/$REPO/main/bin"
@@ -124,19 +124,26 @@ if ($userPath -notlike "*$BinDir*") {
 
 # ── Add to PowerShell profile ─────────────────────────────────────────────────
 $profilePath = $PROFILE.CurrentUserCurrentHost
-$profileDir  = Split-Path $profilePath -Parent
-if (-not (Test-Path $profileDir)) { New-Item -ItemType Directory -Path $profileDir -Force | Out-Null }
-if (-not (Test-Path $profilePath)) { New-Item -ItemType File -Path $profilePath -Force | Out-Null }
-
-$pathLine = '$env:PATH = "$env:USERPROFILE\.local\bin;$env:PATH" # wezcld'
-if (-not (Select-String -Path $profilePath -Pattern '# wezcld$' -Quiet)) {
-    # Always append on a new line (existing file may not end with newline)
-    $existing = Get-Content $profilePath -Raw -ErrorAction SilentlyContinue
-    if ($existing -and -not $existing.EndsWith("`n")) {
-        Add-Content -Path $profilePath -Value "" -Encoding UTF8
+if ($profilePath) {
+    $profileDir = Split-Path $profilePath -Parent
+    if ($profileDir -and -not (Test-Path $profileDir)) {
+        New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
     }
-    Add-Content -Path $profilePath -Value $pathLine -Encoding UTF8
-    Write-Ok "Added PATH to PowerShell profile: $profilePath"
+    if (-not (Test-Path $profilePath)) {
+        New-Item -ItemType File -Path $profilePath -Force | Out-Null
+    }
+    $pathLine = '$env:PATH = "$env:USERPROFILE\.local\bin;$env:PATH" # wezcld'
+    if (-not (Select-String -Path $profilePath -Pattern '# wezcld$' -Quiet -ErrorAction SilentlyContinue)) {
+        $existing = Get-Content $profilePath -Raw -ErrorAction SilentlyContinue
+        if ($existing -and -not $existing.EndsWith("`n")) {
+            Add-Content -Path $profilePath -Value "" -Encoding UTF8
+        }
+        Add-Content -Path $profilePath -Value $pathLine -Encoding UTF8
+        Write-Ok "Added PATH to PowerShell profile: $profilePath"
+    }
+} else {
+    Write-Warn "Could not detect PowerShell profile path - please add manually:"
+    Write-Host '  $env:PATH = "$env:USERPROFILE\.local\bin;$env:PATH"' -ForegroundColor Gray
 }
 
 # ── Done ──────────────────────────────────────────────────────────────────────
