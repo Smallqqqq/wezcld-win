@@ -141,28 +141,44 @@ function Invoke-SessionSplit {
 }
 
 # ── Convert Unix shell command to PowerShell syntax ───────────────────────────
-# Handles:
-#   cd 'dir' && env K1=V1 K2=V2 node script.js --args
-# Converts to:
-#   cd 'dir'; $env:K1='V1'; $env:K2='V2'; node script.js --args
+# Handles Claude Code's agent launch pattern:
+#   cd 'dir' && env K1=V1 K2=V2 'node_script' --args
+# Converts to PowerShell:
+#   Set-Location 'dir'; $env:K1='V1'; $env:K2='V2'; & 'node_script' --args
 function Convert-UnixToPowerShell {
     param([string]$cmd)
 
-    # Replace && with ; (PS5 does not support &&)
+    # 1. Unescape backslash-escaped colons that Unix shells produce (https\:// → https://)
+    $cmd = $cmd -replace '\\:', ':'
+
+    # 2. Replace && with ; (PS5 does not support &&)
     $cmd = $cmd -replace '\s*&&\s*', '; '
 
-    # Convert "env K=V K2=V2 <rest>" to "$env:K='V'; $env:K2='V2'; <rest>"
-    # This pattern handles the leading "env " prefix used in Unix
-    $cmd = [regex]::Replace($cmd, '(?<=(^|;\s*))env\s+((?:[A-Za-z_][A-Za-z_0-9]*=[^\s]+\s+)+)', {
+    # 3. Convert Unix "env K1=V1 K2=V2 <executable> <args>" block
+    #    Regex: after start-of-string or "; ", match "env " followed by one-or-more KEY=VALUE pairs,
+    #    then capture everything after as the real command.
+    $envPattern = '(?:^|(?<=;\s))env\s+((?:[A-Za-z_][A-Za-z_0-9]*=[^\s]+\s+)+)(.*)'
+    $cmd = [regex]::Replace($cmd, $envPattern, {
         param($m)
-        $prefix = $m.Groups[1].Value
-        $pairs  = $m.Groups[2].Value.Trim() -split '\s+'
-        $setters = ($pairs | Where-Object { $_ -match '=' } | ForEach-Object {
-            $kv = $_ -split '=', 2
-            '$env:{0}=''{1}''' -f $kv[0], ($kv[1] -replace "'","''")
+        $pairsRaw = $m.Groups[1].Value.Trim() -split '\s+'
+        $rest     = $m.Groups[2].Value.Trim()
+
+        $setters = ($pairsRaw | Where-Object { $_ -match '^[A-Za-z_][A-Za-z_0-9]*=' } | ForEach-Object {
+            $kv  = $_ -split '=', 2
+            $key = $kv[0]
+            $val = $kv[1] -replace "'", "''"   # escape single quotes inside value
+            "`$env:$key='$val'"
         }) -join '; '
-        "$prefix$setters; "
+
+        # $rest is the executable + args. In PowerShell a bare string is not executed,
+        # need & to invoke it. If it's a .js file, invoke via "node".
+        $invoke = if ($rest -match "\.js'?\s*") { "& node $rest" } else { "& $rest" }
+
+        "$setters; $invoke"
     })
+
+    # 4. Convert "cd 'path'" → "Set-Location 'path'"
+    $cmd = $cmd -replace '(?:^|(?<=;\s))cd\s+', 'Set-Location '
 
     return $cmd.Trim()
 }
