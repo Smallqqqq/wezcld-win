@@ -1,0 +1,33 @@
+name: Release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: go-semantic-release/action@v1
+        id: semrel
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          allow-initial-development-versions: true
+
+      - name: Upload release assets
+        if: steps.semrel.outputs.version != ''
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          mkdir -p dist
+          sed 's/wezcld dev/wezcld ${{ steps.semrel.outputs.version }}/' bin/wezcld > dist/wezcld
+          cp bin/it2 dist/it2
+          cp install.sh dist/install.sh
+          gh release upload "v${{ steps.semrel.outputs.version }}" dist/install.sh dist/wezcld dist/it2

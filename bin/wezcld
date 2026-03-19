@@ -1,0 +1,77 @@
+#!/bin/sh
+set -eu
+
+# Uninstall
+if [ "${1:-}" = "--uninstall" ]; then
+    BIN_DIR="$HOME/.local/bin"
+    INSTALL_DIR="$HOME/.local/share/wezcld"
+    STATE_DIR="$HOME/.local/state/wezcld"
+    echo "Uninstalling wezcld..."
+    rm -f "$BIN_DIR/wezcld" "$BIN_DIR/it2"
+    rm -rf "$INSTALL_DIR"
+    rm -rf "$STATE_DIR"
+    for rc in "$HOME/.bashrc" "$HOME/.zshrc"; do
+        if [ -f "$rc" ]; then
+            tmp="${rc}.wezcld-tmp"
+            grep -v '# wezcld$' "$rc" > "$tmp" || true
+            mv "$tmp" "$rc"
+        fi
+    done
+    echo "wezcld uninstalled."
+    exit 0
+fi
+
+# Resolve paths (follow symlinks) — POSIX compatible
+SOURCE="$0"
+while [ -L "$SOURCE" ]; do
+    DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+    SOURCE="$(readlink "$SOURCE")"
+    case "$SOURCE" in
+        /*) ;;
+        *)  SOURCE="$DIR/$SOURCE" ;;
+    esac
+done
+SHIM_DIR="$(cd "$(dirname "$SOURCE")/.." && pwd)"
+
+# Version
+if [ "${1:-}" = "--version" ] || [ "${1:-}" = "-v" ]; then
+    echo "wezcld dev"
+    exit 0
+fi
+
+# Detect WezTerm
+if [ "${TERM_PROGRAM:-}" != "WezTerm" ]; then
+    echo "Warning: Not running in WezTerm. Falling back to plain claude." >&2
+    exec claude "$@"
+fi
+
+# Initialize state directory
+STATE_DIR="${WEZCLD_STATE:-$HOME/.local/state/wezcld}"
+mkdir -p "$STATE_DIR"
+
+# Override TERM_PROGRAM to trigger Claude Code's iTerm detection
+export TERM_PROGRAM="iTerm.app"
+export LC_TERMINAL="iTerm2"
+export ITERM_SESSION_ID="wezcld-$$"
+
+# Put our it2 shim first in PATH
+export WEZCLD_STATE="$STATE_DIR"
+export PATH="$SHIM_DIR/bin:$PATH"
+
+# Spawn detached watchdog that monitors our PID and cleans up panes after we die
+(
+    PARENT=$$
+    while kill -0 "$PARENT" 2>/dev/null; do
+        sleep 1
+    done
+    grid_file="$STATE_DIR/grid-panes-${WEZTERM_PANE}"
+    [ -f "$grid_file" ] || exit 0
+    while IFS= read -r pane_id; do
+        [ -n "$pane_id" ] || continue
+        wezterm cli kill-pane --pane-id "$pane_id" 2>/dev/null || true
+    done < "$grid_file"
+    rm -f "$grid_file"
+) &
+
+# exec into claude so WezTerm sees the real process
+exec claude --teammate-mode tmux "$@"
