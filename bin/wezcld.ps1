@@ -66,6 +66,13 @@ $StateDir = if ($env:WEZCLD_STATE) { $env:WEZCLD_STATE } else {
 }
 New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
 
+# ── Clean up stale state from previous sessions ───────────────────────────────
+# Remove grid-panes-*, *.lock, *.tmp left by previous runs
+Get-ChildItem -Path $StateDir -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -match '^grid-panes' } |
+    ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
+Remove-Item (Join-Path $StateDir "it2-counter") -Force -ErrorAction SilentlyContinue
+
 # ── Override env vars to trigger Claude Code's iTerm detection ───────────────
 $env:TERM_PROGRAM    = "iTerm.app"
 $env:LC_TERMINAL     = "iTerm2"

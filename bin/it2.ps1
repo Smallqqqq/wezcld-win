@@ -2,8 +2,7 @@
 # Compatible with Windows PowerShell 5.1+ and PowerShell 7+
 # NOTE: No param() block - we use $args directly so --version is not swallowed by PS parameter binding
 
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
+$ErrorActionPreference = "SilentlyContinue"   # never let internal errors bubble up to Claude Code
 
 # All raw arguments as string array
 $Argv = @($args | ForEach-Object { "$_" })
@@ -12,37 +11,74 @@ $Argv = @($args | ForEach-Object { "$_" })
 $StateDir = if ($env:WEZCLD_STATE) { $env:WEZCLD_STATE } else {
     Join-Path $env:USERPROFILE ".local\state\wezcld"
 }
-New-Item -ItemType Directory -Path $StateDir -Force | Out-Null
+$null = New-Item -ItemType Directory -Path $StateDir -Force -ErrorAction SilentlyContinue
 
-$LogFile     = Join-Path $StateDir "it2-calls.log"
-$CounterFile = Join-Path $StateDir "it2-counter"
+$LogFile = Join-Path $StateDir "it2-calls.log"
 
-# ── Atomic counter (Named Mutex) ──────────────────────────────────────────────
-function Get-NextSessionId {
-    $mtx = New-Object System.Threading.Mutex($false, "Global\WezcldCounter")
-    $acquired = $false
-    try {
-        $acquired = $mtx.WaitOne(3000)
-        if (-not $acquired) { return 0 }
-        $counter = 0
-        if (Test-Path $CounterFile) {
-            $counter = [int](Get-Content $CounterFile -Raw).Trim()
+# ── File-lock based grid I/O ──────────────────────────────────────────────────
+# Uses an exclusive .lock file (FileShare.None) with retries.
+# Much more reliable than Named Mutex on Windows PS5 across multiple processes.
+
+function Invoke-WithFileLock {
+    param(
+        [string]$LockPath,
+        [scriptblock]$Action,
+        [int]$TimeoutMs = 8000,
+        [int]$RetryMs   = 50
+    )
+    $deadline = [datetime]::UtcNow.AddMilliseconds($TimeoutMs)
+    $fs = $null
+    while ([datetime]::UtcNow -lt $deadline) {
+        try {
+            $fs = [System.IO.File]::Open(
+                $LockPath,
+                [System.IO.FileMode]::OpenOrCreate,
+                [System.IO.FileAccess]::ReadWrite,
+                [System.IO.FileShare]::None
+            )
+            # Got the lock - run the action
+            try { & $Action } finally { $fs.Close(); $fs.Dispose() }
+            return
+        } catch [System.IO.IOException] {
+            if ($fs) { try { $fs.Dispose() } catch {} ; $fs = $null }
+            Start-Sleep -Milliseconds $RetryMs
+        } catch {
+            if ($fs) { try { $fs.Dispose() } catch {} ; $fs = $null }
+            break
         }
-        $counter++
-        Set-Content $CounterFile $counter -Encoding UTF8
-        return $counter
-    } finally {
-        if ($acquired) { try { $mtx.ReleaseMutex() } catch {} }
-        $mtx.Dispose()
     }
+    # Timed out - run anyway without lock (better than failing silently)
+    & $Action
+}
+
+function Read-GridFile {
+    param([string]$GridFile)
+    if (-not (Test-Path $GridFile)) { return @() }
+    $lines = Get-Content $GridFile -ErrorAction SilentlyContinue
+    if (-not $lines) { return @() }
+    return @($lines | Where-Object { $_.Trim() -ne "" })
+}
+
+function Write-GridFile {
+    param([string]$GridFile, [string[]]$Lines)
+    $content = ($Lines | Where-Object { $_.Trim() -ne "" }) -join "`n"
+    # Direct write - we already hold the .lock file so no concurrent writer possible
+    [System.IO.File]::WriteAllText($GridFile, $content, [System.Text.Encoding]::UTF8)
 }
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 function Write-Log {
     param([int]$ExitCode, [string]$Output, [string]$ArgvStr)
-    $ts   = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
-    $line = "[$ts] ARGV: $ArgvStr | EXIT: $ExitCode | STDOUT: $Output"
-    Add-Content -Path $LogFile -Value $line -Encoding UTF8
+    try {
+        $ts   = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+        $line = "[$ts] ARGV: $ArgvStr | EXIT: $ExitCode | STDOUT: $Output`n"
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($line)
+        $logFs = [System.IO.File]::Open($LogFile,
+            [System.IO.FileMode]::Append,
+            [System.IO.FileAccess]::Write,
+            [System.IO.FileShare]::ReadWrite)
+        try { $logFs.Write($bytes, 0, $bytes.Length) } finally { $logFs.Close() }
+    } catch {}
 }
 
 # Build ARGV string for logging
@@ -51,135 +87,97 @@ $ArgvStr = "it2 " + ($Argv | ForEach-Object {
     if ($s -match '[ "|]') { "'$s'" } else { $s }
 } | Where-Object { $_ -ne "" }) -join " "
 
-# ── Grid mutex helpers ────────────────────────────────────────────────────────
-$script:GridMutex = $null
-
-function Lock-Grid {
-    $paneId = if ($env:WEZTERM_PANE) { $env:WEZTERM_PANE } else { "0" }
-    $script:GridMutex = New-Object System.Threading.Mutex($false, "Global\WezcldGrid_$paneId")
-    $acquired = $script:GridMutex.WaitOne(5000)
-    if (-not $acquired) {
-        Write-Host "Failed to acquire grid lock" -ForegroundColor Red
-        return $false
-    }
-    return $true
-}
-
-function Unlock-Grid {
-    if ($script:GridMutex) {
-        try { $script:GridMutex.ReleaseMutex() } catch {}
-        $script:GridMutex.Dispose()
-        $script:GridMutex = $null
-    }
-}
-
-# ── Prune stale panes ─────────────────────────────────────────────────────────
-function Remove-StalePanes {
-    param([string]$GridFile)
-    if (-not (Test-Path $GridFile)) { return }
-    $content = @(Get-Content $GridFile -ErrorAction SilentlyContinue | Where-Object { $_.Trim() })
-    if (-not $content) { return }
+# ── Prune stale panes (called inside lock) ────────────────────────────────────
+function Get-LivePaneIds {
     try {
-        $liveOutput = wezterm cli list 2>$null
-        if (-not $liveOutput) { return }
-        $livePanes = @($liveOutput | Select-Object -Skip 1 | ForEach-Object {
-            ($_ -split '\s+') | Where-Object { $_ } | Select-Object -Index 2
+        $out = wezterm cli list 2>$null
+        if (-not $out) { return $null }
+        return @($out | Select-Object -Skip 1 | ForEach-Object {
+            $cols = ($_ -split '\s+') | Where-Object { $_ }
+            if ($cols.Count -gt 2) { $cols[2] }
         } | Where-Object { $_ })
-    } catch { return }
-    $kept = $content | Where-Object { $id = $_.Trim(); $id -and ($livePanes -contains $id) }
-    Set-Content $GridFile ($kept -join "`n") -NoNewline -Encoding UTF8
+    } catch { return $null }
 }
 
 # ── session split ─────────────────────────────────────────────────────────────
 function Invoke-SessionSplit {
-    param([string[]]$SubArgs)
-    if (-not (Lock-Grid)) { exit 1 }
-    try {
-        $MAX_COLS = 3
-        $paneEnv  = if ($env:WEZTERM_PANE) { $env:WEZTERM_PANE } else { "0" }
-        $GridFile = Join-Path $StateDir "grid-panes-$paneEnv"
+    $MAX_COLS = 3
+    $paneEnv  = if ($env:WEZTERM_PANE) { $env:WEZTERM_PANE } else { "0" }
+    $GridFile = Join-Path $StateDir "grid-panes-$paneEnv"
+    $LockFile = "$GridFile.lock"
 
-        Remove-StalePanes $GridFile
+    # All grid work done inside the file lock
+    # We use a .NET List to pass results out of the scriptblock (scriptblock has its own scope)
+    $resultBox = [System.Collections.Generic.List[string]]::new()
 
-        $agentCount = 0
-        if (Test-Path $GridFile) {
-            $lines = @(Get-Content $GridFile | Where-Object { $_.Trim() -ne "" })
-            $agentCount = $lines.Count
+    Invoke-WithFileLock -LockPath $LockFile -Action {
+        # Read current panes
+        $panes = Read-GridFile $GridFile
+
+        # Prune stale panes
+        $live = Get-LivePaneIds
+        if ($live) {
+            $panes = @($panes | Where-Object { $live -contains $_.Trim() })
         }
 
+        $agentCount = $panes.Count
         $row = [math]::Floor($agentCount / $MAX_COLS)
         $col = $agentCount % $MAX_COLS
-        $newPaneId = ""
+        $newPaneId = $null
 
         if ($row -eq 0 -and $col -eq 0) {
-            $newPaneId = (wezterm cli split-pane --top --percent 65 --pane-id "$paneEnv" 2>$null) | Select-Object -First 1
+            # First agent: split upward from leader (leader stays at bottom 35%)
+            $newPaneId = (wezterm cli split-pane --top --percent 65 --pane-id "$paneEnv" 2>$null) |
+                         Select-Object -First 1
         } elseif ($row -eq 0) {
-            $allLines   = @(Get-Content $GridFile | Where-Object { $_.Trim() -ne "" })
-            $prevPane   = $allLines[-1].Trim()
-            $remaining  = $MAX_COLS - $col
-            $pct        = [math]::Floor((100 * $remaining + ($remaining + 1) / 2) / ($remaining + 1))
-            $newPaneId  = (wezterm cli split-pane --right --percent $pct --pane-id "$prevPane" 2>$null) | Select-Object -First 1
+            # Fill first row: split right from the previous pane
+            $prevPane  = $panes[-1].Trim()
+            $remaining = $MAX_COLS - $col
+            $pct       = [math]::Floor((100 * $remaining + ($remaining + 1) / 2) / ($remaining + 1))
+            $newPaneId = (wezterm cli split-pane --right --percent $pct --pane-id "$prevPane" 2>$null) |
+                         Select-Object -First 1
         } else {
-            $paneAboveIdx = $agentCount - $MAX_COLS
-            $allLines     = @(Get-Content $GridFile | Where-Object { $_.Trim() -ne "" })
-            $paneAbove    = $allLines[$paneAboveIdx].Trim()
-            $newPaneId    = (wezterm cli split-pane --bottom --pane-id "$paneAbove" 2>$null) | Select-Object -First 1
+            # New row: split downward from the pane in the same column above
+            $paneAbove = $panes[$agentCount - $MAX_COLS].Trim()
+            $newPaneId = (wezterm cli split-pane --bottom --pane-id "$paneAbove" 2>$null) |
+                         Select-Object -First 1
         }
 
-        if (-not $newPaneId) {
-            Write-Host "Failed to create split pane" -ForegroundColor Red
-            exit 1
+        if ($newPaneId) {
+            $newId = $newPaneId.Trim()
+            $panes += $newId
+            Write-GridFile -GridFile $GridFile -Lines $panes
+            wezterm cli activate-pane --pane-id "$paneEnv" 2>$null | Out-Null
+            $resultBox.Add("Created new pane: $newId")   # pass result out via reference type
         }
-
-        Add-Content -Path $GridFile -Value $newPaneId.Trim() -Encoding UTF8
-        wezterm cli activate-pane --pane-id "$paneEnv" 2>$null | Out-Null
-
-        return "Created new pane: $($newPaneId.Trim())"
-    } finally {
-        Unlock-Grid
     }
+
+    if ($resultBox.Count -gt 0) { return $resultBox[0] }
+    return ""
 }
 
-# ── Convert Unix shell command to PowerShell syntax ───────────────────────────
-# Handles Claude Code's agent launch pattern:
-#   cd 'dir' && env K1=V1 K2=V2 'node_script' --args
-# Converts to PowerShell:
-#   Set-Location 'dir'; $env:K1='V1'; $env:K2='V2'; & 'node_script' --args
+# ── Convert Unix shell command → PowerShell ───────────────────────────────────
 function Convert-UnixToPowerShell {
     param([string]$cmd)
-
-    # 1. Unescape backslash-escaped colons that Unix shells produce (https\:// → https://)
+    # Unescape backslash-escaped colons (https\:// → https://)
     $cmd = $cmd -replace '\\:', ':'
-
-    # 2. Replace && with ; (PS5 does not support &&)
+    # Replace && with ;
     $cmd = $cmd -replace '\s*&&\s*', '; '
-
-    # 3. Convert Unix "env K1=V1 K2=V2 <executable> <args>" block
-    #    Regex: after start-of-string or "; ", match "env " followed by one-or-more KEY=VALUE pairs,
-    #    then capture everything after as the real command.
+    # Convert "env K=V ... <exe>" block
     $envPattern = '(?:^|(?<=;\s))env\s+((?:[A-Za-z_][A-Za-z_0-9]*=[^\s]+\s+)+)(.*)'
     $cmd = [regex]::Replace($cmd, $envPattern, {
         param($m)
         $pairsRaw = $m.Groups[1].Value.Trim() -split '\s+'
         $rest     = $m.Groups[2].Value.Trim()
-
-        $setters = ($pairsRaw | Where-Object { $_ -match '^[A-Za-z_][A-Za-z_0-9]*=' } | ForEach-Object {
-            $kv  = $_ -split '=', 2
-            $key = $kv[0]
-            $val = $kv[1] -replace "'", "''"   # escape single quotes inside value
-            "`$env:$key='$val'"
+        $setters  = ($pairsRaw | Where-Object { $_ -match '^[A-Za-z_][A-Za-z_0-9]*=' } | ForEach-Object {
+            $kv = $_ -split '=', 2
+            "`$env:$($kv[0])='$($kv[1] -replace "'","''")'"
         }) -join '; '
-
-        # $rest is the executable + args. In PowerShell a bare string is not executed,
-        # need & to invoke it. If it's a .js file, invoke via "node".
         $invoke = if ($rest -match "\.js'?\s*") { "& node $rest" } else { "& $rest" }
-
         "$setters; $invoke"
     })
-
-    # 4. Convert "cd 'path'" → "Set-Location 'path'"
+    # cd → Set-Location
     $cmd = $cmd -replace '(?:^|(?<=;\s))cd\s+', 'Set-Location '
-
     return $cmd.Trim()
 }
 
@@ -213,20 +211,14 @@ function Invoke-SessionClose {
         } else { $i++ }
     }
     if ($target) {
-        # Suppress all output/errors from wezterm (pane may not exist in unit tests)
-        # Use cmd /c to fully isolate native command exit codes from PowerShell error handling
-        $ErrorActionPreference = "SilentlyContinue"
-        cmd /c "wezterm cli kill-pane --pane-id `"$target`" >nul 2>&1" | Out-Null
-        $ErrorActionPreference = "Stop"
-        if (Lock-Grid) {
-            try {
-                $paneEnv  = if ($env:WEZTERM_PANE) { $env:WEZTERM_PANE } else { "0" }
-                $GridFile = Join-Path $StateDir "grid-panes-$paneEnv"
-                if (Test-Path $GridFile) {
-                    $kept = Get-Content $GridFile | Where-Object { $_.Trim() -ne $target }
-                    Set-Content $GridFile ($kept -join "`n") -NoNewline -Encoding UTF8
-                }
-            } finally { Unlock-Grid }
+        cmd /c "wezterm cli kill-pane --pane-id `"$target`" >nul 2>&1"
+        $paneEnv  = if ($env:WEZTERM_PANE) { $env:WEZTERM_PANE } else { "0" }
+        $GridFile = Join-Path $StateDir "grid-panes-$paneEnv"
+        $LockFile = "$GridFile.lock"
+        Invoke-WithFileLock -LockPath $LockFile -Action {
+            $panes = Read-GridFile $GridFile
+            $panes = @($panes | Where-Object { $_.Trim() -ne $target })
+            Write-GridFile -GridFile $GridFile -Lines $panes
         }
     }
     return "Session closed"
@@ -239,17 +231,16 @@ function Main {
     $cmd0     = if ($Argv.Count -gt 0) { $Argv[0] } else { "" }
 
     switch ($cmd0) {
-        "--version"                        { $output = "it2 0.2.3" }
-        { $_ -in @("--help", "") }         { $output = "it2 - iTerm2 CLI (wezcld shim)" }
+        "--version"                      { $output = "it2 0.2.3" }
+        { $_ -in @("--help", "") }       { $output = "it2 - iTerm2 CLI (wezcld shim)" }
         "app" {
-            $sub = if ($Argv.Count -gt 1) { $Argv[1] } else { "" }
-            if ($sub -eq "version") { $output = "it2 0.2.3" }
+            if ($Argv.Count -gt 1 -and $Argv[1] -eq "version") { $output = "it2 0.2.3" }
         }
         "session" {
             $sub     = if ($Argv.Count -gt 1) { $Argv[1] } else { "" }
             $subArgs = if ($Argv.Count -gt 2) { $Argv[2..($Argv.Count-1)] } else { @() }
             switch ($sub) {
-                "split"                              { $output = Invoke-SessionSplit $subArgs }
+                "split"                              { $output = Invoke-SessionSplit }
                 { $_ -in @("send","send-text") }    { $output = "" }
                 "run"                               { $output = Invoke-SessionRun $subArgs }
                 "close"                             { $output = Invoke-SessionClose $subArgs }
@@ -258,20 +249,15 @@ function Main {
                 default                             { $output = "" }
             }
         }
-        { $_ -in @("split","vsplit") } {
-            $sid    = Get-NextSessionId
-            $output = "Created new pane: fake-session-$sid"
-        }
-        { $_ -in @("send","run") }         { $output = "" }
-        "ls"                               { $output = "Session ID       Name    Title           Size    TTY" }
-        default                            { $output = "" }
+        { $_ -in @("split","vsplit") }   { $output = Invoke-SessionSplit }
+        { $_ -in @("send","run") }       { $output = "" }
+        "ls"                             { $output = "Session ID       Name    Title           Size    TTY" }
+        default                          { $output = "" }
     }
 
-    # Always emit output here (single place), functions return strings without printing
     if ($output) { Write-Output $output }
-
     Write-Log -ExitCode $exitCode -Output $output -ArgvStr $ArgvStr
-    exit $exitCode
+    exit 0   # always exit 0 - never fail Claude Code
 }
 
 Main
