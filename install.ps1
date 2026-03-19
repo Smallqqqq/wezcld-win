@@ -12,9 +12,12 @@ $ErrorActionPreference = "Continue"
 
 $REPO     = "Smallqqqq/wezcld-win"
 $BASE_URL = "https://raw.githubusercontent.com/$REPO/main/bin"
-$InstallDir  = Join-Path $env:USERPROFILE ".local\share\wezcld\bin"
-$BinDir      = Join-Path $env:USERPROFILE ".local\bin"
-$StateDir    = Join-Path $env:USERPROFILE ".local\state\wezcld"
+
+# Resolve home dir - works in both normal and iex pipe contexts
+$HomeDir     = if ($env:USERPROFILE) { $env:USERPROFILE } elseif ($HOME) { $HOME } else { "C:\Users\$env:USERNAME" }
+$InstallDir  = Join-Path $HomeDir ".local\share\wezcld\bin"
+$BinDir      = Join-Path $HomeDir ".local\bin"
+$StateDir    = Join-Path $HomeDir ".local\state\wezcld"
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 function Write-Ok  { param($msg) Write-Host "  $msg" -ForegroundColor Green }
