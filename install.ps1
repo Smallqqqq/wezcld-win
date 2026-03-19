@@ -73,8 +73,8 @@ function Install-Script {
     param([string]$File, [string]$Dest)
 
     # 1. Look for the file next to install.ps1 (local clone / development)
-    $LocalSrc = Join-Path $PSScriptRoot "bin\$File"
-    if (Test-Path $LocalSrc) {
+    $LocalSrc = if ($PSScriptRoot) { Join-Path $PSScriptRoot "bin\$File" } else { "" }
+    if ($LocalSrc -and (Test-Path $LocalSrc)) {
         Write-Host "  Installing $File from local source..." -NoNewline
         Copy-Item $LocalSrc $Dest -Force
         Write-Ok " OK"
