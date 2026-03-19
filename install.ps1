@@ -37,8 +37,13 @@ if ($Uninstall) {
     if (Test-Path $StateDir)   { Remove-Item $StateDir -Recurse -Force; Write-Ok "Removed $StateDir" }
 
     # Remove PATH entry from PowerShell profile
-    foreach ($profilePath in @($PROFILE.CurrentUserAllHosts, $PROFILE.CurrentUserCurrentHost)) {
-        if (Test-Path $profilePath) {
+    # In iex context $PROFILE is a plain string; use it directly and derive AllHosts path
+    $profileCurrent = if ($PROFILE -is [string]) { $PROFILE } else { $PROFILE.CurrentUserCurrentHost }
+    $profileAllHost = if ($PROFILE -is [string]) {
+        Join-Path (Split-Path $PROFILE -Parent) "profile.ps1"
+    } else { $PROFILE.CurrentUserAllHosts }
+    foreach ($profilePath in @($profileAllHost, $profileCurrent)) {
+        if ($profilePath -and (Test-Path $profilePath)) {
             $lines    = Get-Content $profilePath
             $filtered = $lines | Where-Object { $_ -notmatch '# wezcld$' }
             Set-Content $profilePath $filtered
@@ -126,7 +131,8 @@ if ($userPath -notlike "*$BinDir*") {
 }
 
 # ── Add to PowerShell profile ─────────────────────────────────────────────────
-$profilePath = $PROFILE.CurrentUserCurrentHost
+# In iex pipe context $PROFILE is a plain string (= CurrentUserCurrentHost path)
+$profilePath = if ($PROFILE -is [string]) { $PROFILE } else { $PROFILE.CurrentUserCurrentHost }
 if ($profilePath) {
     $profileDir = Split-Path $profilePath -Parent
     if ($profileDir -and -not (Test-Path $profileDir)) {
