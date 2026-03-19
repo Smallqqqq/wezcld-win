@@ -7,137 +7,111 @@
   ╚══╝╚══╝ ╚══════╝ ╚══════╝  ╚═════╝ ╚══════╝╚═════╝
 ```
 
-[![Release](https://img.shields.io/github/v/release/afewyards/wezcld)](https://github.com/afewyards/wezcld/releases/latest)
+> 本项目参考 [afewyards/wezcld](https://github.com/afewyards/wezcld) 的 Linux 版本，通过 Vibe Coding 方式移植实现的 **Windows 原生 PowerShell 版本**。
 
-**WezTerm it2 shim for Claude Code agent teams**
-
-![wezcld demo](docs/demo.gif)
-
-## Why
-
-Claude Code uses iTerm2 split panes to manage agent teams. wezcld intercepts `it2` CLI commands and translates them to WezTerm CLI calls, letting you use native WezTerm splits instead of iTerm2.
-
-## Platform Support
-
-| Platform | Scripts | Shell |
-|----------|---------|-------|
-| **Windows** | `bin/wezcld.ps1`, `bin/it2.ps1` | PowerShell 5.1+ / pwsh 7+ |
-| **macOS / Linux** | `bin/wezcld`, `bin/it2` | POSIX sh (bash/zsh/dash) |
+**WezTerm × Claude Code 多 Agent 分屏工具（Windows 版）**
 
 ---
 
-## Windows Install
+## 这是什么
 
-> **Requirements:** WezTerm, Claude Code (`claude` in PATH), PowerShell 5.1+
+Claude Code 在启动多 Agent 协作时，会通过 `it2` 命令（iTerm2 专属 CLI）来管理分屏窗格。  
+`wezcld` 拦截这些 `it2` 命令，将其翻译为 `wezterm cli` 调用，让你在 **Windows + WezTerm** 环境下也能享受 Claude Code 的多 Agent 分屏能力。
+
+---
+
+## 安装
+
+### 前置要求
+
+- [WezTerm](https://wezfurlong.org/wezterm/installation.html) 已安装，`wezterm` 在 PATH 中可用
+- [Claude Code](https://docs.anthropic.com/claude/docs/claude-code) 已安装，`claude` 在 PATH 中可用
+- PowerShell 5.1+（Windows 10/11 内置）或 PowerShell 7+
+
+### 一键安装
+
+在 PowerShell 中执行：
 
 ```powershell
-# Install (run in PowerShell)
-irm https://github.com/afewyards/wezcld/releases/latest/download/install.ps1 | iex
+irm https://raw.githubusercontent.com/Smallqqqq/wezcld-win/main/install.ps1 | iex
 ```
 
-Or clone this repo and run locally:
+### 本地安装（克隆仓库后）
 
 ```powershell
+git clone https://github.com/Smallqqqq/wezcld-win.git
+cd wezcld-win
 .\install.ps1
 ```
 
-**Uninstall:**
+### 安装程序做了什么
+
+1. 将 `wezcld.ps1` 和 `it2.ps1` 下载到 `%USERPROFILE%\.local\share\wezcld\bin\`
+2. 在 `%USERPROFILE%\.local\bin\` 创建 `wezcld.cmd` / `it2.cmd` 包装器，使你可以直接输入 `wezcld` 运行
+3. 将 `%USERPROFILE%\.local\bin` 永久写入用户 `PATH`（注册表级别）
+4. 在 PowerShell Profile 中追加 PATH 设置，新窗口即时生效
+
+### 卸载
 
 ```powershell
+# 克隆仓库后执行
 .\install.ps1 -Uninstall
 ```
 
-### What the Windows installer does
-
-1. Downloads `wezcld.ps1` and `it2.ps1` to `%USERPROFILE%\.local\share\wezcld\bin\`
-2. Creates `wezcld.cmd` and `it2.cmd` wrappers in `%USERPROFILE%\.local\bin\` (so you can type `wezcld` / `it2` directly)
-3. Adds `%USERPROFILE%\.local\bin` to your user `PATH` (persistent, via registry)
-4. Adds the same to your PowerShell profile
-
 ---
 
-## macOS / Linux Install
+## 使用方法
 
-```sh
-curl -fsSL https://github.com/afewyards/wezcld/releases/latest/download/install.sh | sh
-```
+安装完成后，**重新打开终端**（或在当前窗口执行 `. $PROFILE`），然后：
 
-**Uninstall:**
-
-```sh
-curl -fsSL https://github.com/afewyards/wezcld/releases/latest/download/install.sh | sh -s -- --uninstall
-```
-
----
-
-## Usage
-
-Launch Claude Code with WezTerm integration:
-
-```sh
-# macOS/Linux
+```powershell
+# 在 WezTerm 内启动，自动开启多 Agent 分屏模式
 wezcld
 
-# Windows (PowerShell)
-wezcld
-# or directly:
-powershell -ExecutionPolicy Bypass -File bin\wezcld.ps1
+# 恢复上次会话
+wezcld --resume
 ```
 
-When running outside WezTerm, `wezcld` automatically falls back to plain `claude`.
+> ⚠️ 请在 **WezTerm** 内运行 `wezcld`，在其他终端中运行会自动降级为普通 `claude` 命令。
 
 ---
 
-## How it works
+## 工作原理
 
-**Architecture:**
-
-- **`wezcld` / `wezcld.ps1` launcher**: Sets `TERM_PROGRAM=iTerm.app` and puts the shim's `bin/` directory first in `PATH`, then launches Claude with `--teammate-mode tmux`
-- **`bin/it2` / `bin/it2.ps1` shim**: Intercepts `it2` CLI commands and translates them to real `wezterm cli` calls
-- **Grid layout**: Agent panes are arranged in a 3-column grid, with the leader pane kept at the bottom
-- **Watchdog**: A background process monitors the main PID and auto-cleans all agent panes on exit
-
-### Windows-specific notes
-
-- Uses **Named Mutexes** (`System.Threading.Mutex`) instead of `mkdir`-based locks for atomic concurrency
-- Uses **`cmd /c ... >nul 2>&1`** to fully suppress wezterm errors without PowerShell interfering
-- Watchdog runs as a hidden `Start-Process` instead of a background shell job
-- State stored in `%USERPROFILE%\.local\state\wezcld\`
+```
+wezcld.ps1 启动
+    │
+    ├─ 设置 TERM_PROGRAM=iTerm.app（欺骗 Claude Code 以为在 iTerm2 中）
+    ├─ 将 bin/ 目录插入 PATH 最前（拦截 it2 命令）
+    ├─ 启动后台 Watchdog 进程（监控主进程，退出时自动清理所有分屏）
+    └─ 执行 claude --teammate-mode tmux
+           │
+           └─ Claude Code 调用 it2 命令
+                    │
+                    └─ it2.ps1 拦截并翻译为 wezterm cli 调用
+                             │
+                             ├─ session split  →  wezterm cli split-pane（3列网格布局）
+                             ├─ session run    →  wezterm cli send-text
+                             └─ session close  →  wezterm cli kill-pane
+```
 
 ---
 
-## Supported commands
+## 支持的命令
 
-| Command | WezTerm action |
-|---------|----------------|
-| `--version` / `app version` | Returns `it2 0.2.3` |
-| `session split [-v]` | `wezterm cli split-pane` (grid layout) |
+| `it2` 命令 | 对应的 WezTerm 操作 |
+|-----------|-------------------|
+| `--version` / `app version` | 返回 `it2 0.2.3` |
+| `session split [-v]` | `wezterm cli split-pane`（自动网格布局） |
 | `session run -s <id> <cmd>` | `wezterm cli send-text --pane-id <id>` |
 | `session close -s <id>` | `wezterm cli kill-pane --pane-id <id>` |
-| `session list` | Minimal session table |
-| All other commands | Silent success (exit 0) |
+| `session list` | 返回最简 session 表 |
+| 其他命令 | 静默成功（exit 0） |
 
 ---
 
-## Requirements
-
-- **wezterm CLI** (included with WezTerm)
-- **Claude Code** (the CLI tool from Anthropic)
-- **Windows**: PowerShell 5.1+ (built-in on Windows 10/11) or PowerShell 7+
-- **macOS/Linux**: POSIX-compatible shell (bash, zsh, dash, ash)
-
----
-
-## Development
-
-**Running tests (Windows):**
+## 运行测试
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File tests\integration-test.ps1
-```
-
-**Running tests (macOS/Linux):**
-
-```sh
-./tests/integration-test.sh
 ```
