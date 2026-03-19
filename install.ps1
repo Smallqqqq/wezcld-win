@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 # install.ps1 - wezcld Windows installer
 # Usage:
-#   Install:   irm https://github.com/afewyards/wezcld/releases/latest/download/install.ps1 | iex
+#   Install:   irm https://gitlab.leihuo.netease.com/public-tool/wezcld-main/-/raw/main/install.ps1 | iex
 #   Uninstall: .\install.ps1 -Uninstall
 
 param(
@@ -10,8 +10,9 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$REPO        = "afewyards/wezcld"
-$BASE_URL    = "https://github.com/$REPO/releases/latest/download"
+$REPO        = "public-tool/wezcld-main"
+$GITLAB      = "https://gitlab.leihuo.netease.com"
+$BASE_URL    = "$GITLAB/$REPO/-/raw/main/bin"
 $InstallDir  = Join-Path $env:USERPROFILE ".local\share\wezcld\bin"
 $BinDir      = Join-Path $env:USERPROFILE ".local\bin"
 $StateDir    = Join-Path $env:USERPROFILE ".local\state\wezcld"
