@@ -1,6 +1,6 @@
 -- ╔══════════════════════════════════════════════════════════════════════════════╗
 -- ║                        WezTerm 配置文件                                    ║
--- ║                        最后更新: 2026-03-19                                ║
+-- ║                        最后更新: 2026-03-23                                ║
 -- ╠══════════════════════════════════════════════════════════════════════════════╣
 -- ║                                                                            ║
 -- ║  【快捷键一览】                                                            ║
@@ -69,10 +69,19 @@ local act = wezterm.action
 -- ============================================================================
 
 config.launch_menu = {
-  { label = "正式环境26(普通SSH)",  args = { "ssh", "prod" } },
-  { label = "测试环境28(普通SSH)",  args = { "ssh", "test" } },
+  -- ── 远程 SSH ──
+  { label = "L46-正式worker",    args = { "ssh", "l46-codescan-ali-01" } },
+  { label = "L50-正式代码管理",  args = { "ssh", "l50-test-office-misc-1" } },
+  { label = "测试-jenkins",      args = { "ssh", "lhep-test1" } },
+  { label = "测试-worker",       args = { "ssh", "server97" } },
+  { label = "正式-代码管理平台", args = { "ssh", "lhep-webserver07" } },
+  { label = "正式-番茄",         args = { "ssh", "lhep-webserver13" } },
+  { label = "正式环境26(普通SSH)", args = { "ssh", "prod" } },
+  { label = "测试环境28(普通SSH)", args = { "ssh", "test" } },
+  -- ── 本地 Shell ──
   { label = 'CMD',                  args = { 'cmd.exe' } },
   { label = 'PowerShell',           args = { 'powershell.exe' } },
+  { label = 'Git Bash', args = { 'D:\\Program Files\\Git\\bin\\bash.exe', '-l' } },
   { label = "ai-chat",              args = { "aichat" } },
   { label = "代码管理",             args = { "powershell.exe", "-NoExit", "-Command", "cd 'D:\\PycharmProjects\\code_platform'; & '.venv\\Scripts\\Activate.ps1'" } },
   { label = "代码管理Worker",       args = { "powershell.exe", "-NoExit", "-Command", "cd 'D:\\PycharmProjects\\code_platform_worker'; & '.venv\\Scripts\\Activate.ps1'" } },
@@ -81,9 +90,13 @@ config.launch_menu = {
 }
 
 -- 匹配你的ssh 窗格title，然后返回对应的启动参数，方便分屏
-local domain_map = {
-  { pattern = "lhep-webserver11",   args = { "ssh", "prod" } },
-  { pattern = "lhep-tools04",   args = { "ssh", "test" } },
+local ssh_map = {
+  { pattern = "l46-codescan-ali-01",    args = { "ssh", "l46-codescan-ali-01" } },
+  { pattern = "l50-test-office-misc-1", args = { "ssh", "l50-test-office-misc-1" } },
+  { pattern = "lhep-test1",             args = { "ssh", "lhep-test1" } },
+  { pattern = "server97",               args = { "ssh", "server97" } },
+  { pattern = "lhep-webserver07",       args = { "ssh", "lhep-webserver07" } },
+  { pattern = "lhep-webserver13",       args = { "ssh", "lhep-webserver13" } },
 }
 
 
@@ -102,70 +115,38 @@ config.ssh_domains = {
 -- 辅助函数
 -- ============================================================================
 
---- 检测当前窗格的 shell 环境类型
---- 通过前台进程名和窗口标题判断，用于 aichat 提示词前缀
----@return string env_type 环境类型: cmd/powershell/pwsh/ssh/bash/zsh/fish/unknown
----@return string proc     进程路径
+--- 检测当前窗格的 shell 环境并返回对应的分屏启动参数（仅依赖标题匹配，无进程名匹配）
+---@return string      env   环境类型: powershell/cmd/gitbash/ssh/unknown
+---@return table|nil   args  传给 pane:split() 的 args，nil 则交由 WezTerm 默认处理
 local function detect_env(pane)
-  local proc = (pane:get_foreground_process_name() or ""):lower()
-  local title = (pane:get_title() or ""):lower()
-  -- 按进程名匹配
-  local proc_map = {
-    { pattern = "cmd%.exe",        env = "cmd" },
-    { pattern = "powershell%.exe", env = "powershell" },
-    { pattern = "pwsh%.exe",       env = "pwsh" },
-    { pattern = "ssh",             env = "ssh" },
-    { pattern = "bash",            env = "bash" },
-    { pattern = "zsh",             env = "zsh" },
-    { pattern = "fish",            env = "fish" },
-  }
-  for _, m in ipairs(proc_map) do
-    if proc:find(m.pattern) then return m.env, proc end
+  local title = pane:get_title() or ""
+  for _, m in ipairs(ssh_map) do
+    if title:find(m.pattern, 1, true) then return "ssh", m.args end
   end
-  -- 进程名无法判断时回退到标题
-  if title:find("powershell") then return "powershell", proc end
-  if title:find("cmd")        then return "cmd", proc end
-  if title:find("@")          then return "ssh", proc end
-
-  return "unknown", proc
+  local t = title:lower()
+  if     t:find("bash")       then return "gitbash",    { 'D:\\Program Files\\Git\\bin\\bash.exe', '-l' }
+  elseif t:find("@hih")       then return "ssh",        { 'wsl.exe' }
+  elseif t:find("powershell") then return "powershell", { 'powershell.exe' }
+  elseif t:find("cmd")        then return "cmd",        { 'cmd.exe' }
+  elseif t:find("@")          then return "ssh",        nil
+  end
+  return "unknown", nil
 end
 
 
-
---- 兼容不同版本 WezTerm 的光标位置获取
+--- 兼容不同版本/不同环境的光标位置获取
 ---@return number x, number y
 local function get_cursor_xy(pane)
+  local dims = pane:get_dimensions()
+  if dims and dims.cursor_x ~= nil and dims.cursor_y ~= nil then
+    return dims.cursor_x, dims.cursor_y
+  end
+
   local a, b = pane:get_cursor_position()
   if type(a) == "table" then return a.x, a.y end
-  return a, b
-end
+  if a ~= nil and b ~= nil then return a, b end
 
-
-
---- 根据当前窗格环境，返回新窗格应启动的程序参数
-local function get_smart_split_args(pane)
-  local title = pane:get_title() or ""
-  for _, m in ipairs(domain_map) do
-    if title:find(m.pattern, 1, true) then
-      return m.args
-    end
-  end
-  -- 各类本地 Shell
-  local env, proc = detect_env(pane)
-  local env_args_map = {
-    cmd        = { "cmd.exe" },
-    powershell = { "powershell.exe" },
-    pwsh       = { "pwsh.exe" },
-    bash       = { "bash" },
-    zsh        = { "zsh" },
-    fish       = { "fish" },
-  }
-
-  if env_args_map[env] then
-    return env_args_map[env]
-  end
-  -- unknown → 使用默认 shell（返回 nil 让 WezTerm 自己决定）
-  return nil
+  return 0, 0 -- 最后兜底
 end
 
 
@@ -187,7 +168,7 @@ config.line_height = 1.2
 -- ============================================================================
 
 config.window_decorations = "TITLE|RESIZE"
-config.window_background_opacity = 0.5
+config.window_background_opacity = 0.9
 config.enable_scroll_bar = true
 
 config.use_fancy_tab_bar = true
@@ -229,7 +210,7 @@ config.webgpu_power_preference = 'HighPerformance'
 -- 协议与功能开关
 -- ============================================================================
 
-config.enable_kitty_graphics = true
+-- config.enable_kitty_graphics = true
 config.window_close_confirmation = 'NeverPrompt'
 config.skip_close_confirmation_for_processes_named = {
   'bash', 'zsh', 'fish', 'pwsh', 'powershell', 'cmd', 'nu',
@@ -284,7 +265,7 @@ config.keys = {
     key = 'e',
     mods = 'CTRL|SHIFT',
     action = wezterm.action_callback(function(window, pane)
-      local args = get_smart_split_args(pane)
+      local _, args = detect_env(pane)
       local cwd = pane:get_current_working_dir().file_path
       wezterm.log_info('cwd path = ' .. tostring(cwd))
       if args then
@@ -299,7 +280,7 @@ config.keys = {
     key = 'd',
     mods = 'CTRL|SHIFT',
     action = wezterm.action_callback(function(window, pane)
-      local args = get_smart_split_args(pane)
+      local _, args = detect_env(pane)
       local cwd = pane:get_current_working_dir().file_path
       if args then
         pane:split({ direction = 'Down', args = args, cwd = cwd })
@@ -404,7 +385,7 @@ config.keys = {
     end),
   },
 
-  -- Ctrl+X: 将选中文本(或光标行)发送给 aichat -e，结果粘贴回终端
+  -- Ctrl+X: 将选中文本发送给 aichat -e，结果粘贴回终端
   --   根据当前 shell 环境自动添加提示词前缀
   {
     key = 'x',
