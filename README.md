@@ -77,7 +77,7 @@ curl -fsSL https://github.com/afewyards/wezcld/releases/latest/download/install.
 
 ## 使用方法
 
-启动带 WezTerm 分屏集成的 Claude Code：
+启动带 WezTerm 分屏集成的 Claude Code，/config下的Teammate mode调整为tmux：
 
 ```powershell
 # Windows（PowerShell）—— 在 WezTerm 内运行
