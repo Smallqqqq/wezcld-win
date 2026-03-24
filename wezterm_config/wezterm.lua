@@ -89,16 +89,16 @@ config.launch_menu = {
   { label = "代码扫描",             args = { "powershell.exe", "-NoExit", "-Command", "cd 'D:\\Projects\\code-analysis-web'" } },
 }
 
--- 匹配你的ssh 窗格title，然后返回对应的启动参数，方便分屏
+-- 匹配你的ssh 窗格title，然后返回对应的启动参数和标签名，方便分屏和标签展示
 local ssh_map = {
-  { pattern = "l46-codescan-ali-01",    args = { "ssh", "l46-codescan-ali-01" } },
-  { pattern = "l50-test-office-misc-1", args = { "ssh", "l50-test-office-misc-1" } },
-  { pattern = "lhep-test1",             args = { "ssh", "lhep-test1" } },
-  { pattern = "server97",               args = { "ssh", "server97" } },
-  { pattern = "lhep-webserver07",       args = { "ssh", "lhep-webserver07" } },
-  { pattern = "lhep-webserver13",       args = { "ssh", "lhep-webserver13" } },
-  { pattern = "lhep-webserver11",       args = { "ssh", "prod" } },
-  { pattern = "lhep-tools04",           args = { "ssh", "test" } },
+  { pattern = "l46-codescan-ali-01",    label = "L46-正式worker",      args = { "ssh", "l46-codescan-ali-01" } },
+  { pattern = "l50-test-office-misc-1", label = "L50-正式代码管理",    args = { "ssh", "l50-test-office-misc-1" } },
+  { pattern = "lhep-test1",             label = "测试-jenkins",        args = { "ssh", "lhep-test1" } },
+  { pattern = "server97",               label = "测试-worker",         args = { "ssh", "server97" } },
+  { pattern = "lhep-webserver07",       label = "正式-代码管理平台",   args = { "ssh", "lhep-webserver07" } },
+  { pattern = "lhep-webserver13",       label = "正式-番茄",           args = { "ssh", "lhep-webserver13" } },
+  { pattern = "lhep-webserver11",       label = "正式环境26",          args = { "ssh", "prod" } },
+  { pattern = "lhep-tools04",           label = "测试环境28",          args = { "ssh", "test" } },
 }
 
 
@@ -122,11 +122,13 @@ config.ssh_domains = {
 ---@return table|nil   args  传给 pane:split() 的 args，nil 则交由 WezTerm 默认处理
 local function detect_env(pane)
   local title = pane:get_title() or ""
+  wezterm.log_info('title =' .. tostring(title))
   for _, m in ipairs(ssh_map) do
     if title:find(m.pattern, 1, true) then return "ssh", m.args end
   end
   local t = title:lower()
   if     t:find("bash")       then return "gitbash",    { 'D:\\Program Files\\Git\\bin\\bash.exe', '-l' }
+  elseif t:find("mingw")      then return "gitbash",    { 'D:\\Program Files\\Git\\bin\\bash.exe', '-l' }
   elseif t:find("@hih")       then return "ssh",        { 'wsl.exe' }
   elseif t:find("powershell") then return "powershell", { 'powershell.exe' }
   elseif t:find("cmd")        then return "cmd",        { 'cmd.exe' }
@@ -518,12 +520,18 @@ wezterm.on('format-tab-title', function(tab)
   -- 构建显示标题
   local display
   if title:find('@') then
-    -- SSH 等 user@host 窗口，保留原始标题
-    display = title
+    -- SSH 窗口：尝试匹配 ssh_map 中的 label
+    for _, m in ipairs(ssh_map) do
+      if title:find(m.pattern, 1, true) then
+        display = m.label
+        break
+      end
+    end
+    display = display or title
   elseif title:lower():find('claude') then
     display = (project or '') .. ': 🤖claude'
   elseif project then
-    display = project .. ': ' .. proc
+    display = project .. ': ' .. title
   else
     display = proc ~= '' and proc or title
   end
