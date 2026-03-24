@@ -1,11 +1,11 @@
 -- ╔══════════════════════════════════════════════════════════════════════════════╗
 -- ║                        WezTerm 配置文件                                    ║
--- ║                        最后更新: 2026-03-23                                ║
+-- ║                        最后更新: 2026-03-24                                ║
 -- ╠══════════════════════════════════════════════════════════════════════════════╣
 -- ║                                                                            ║
 -- ║  【快捷键一览】                                                            ║
--- ║  Ctrl+Alt+O            启动Claude Code                                 ║
--- ║  Ctrl+Alt+P            启动wezcld （需配置wezcld）                                ║
+-- ║  Ctrl+Shift+O          启动Claude Code                                 ║
+-- ║  Ctrl+Shift+P          启动wezcld （需配置wezcld）                                ║
 -- ║                                                                            ║
 -- ║  ── 标签页管理 ──                                                          ║
 -- ║  Ctrl+Shift+T          新建标签页                                          ║
@@ -26,7 +26,7 @@
 -- ║  Ctrl+Shift+V          粘贴剪贴板                                          ║
 -- ║  Ctrl+Shift+F          搜索                                                ║
 -- ║  Ctrl+Shift+K          清屏(清除回滚缓冲区)                                ║
--- ║  Shift+PageUp/Dowlsn     翻页滚动                                            ║
+-- ║  Shift+PageUp/Down     翻页滚动                                            ║
 -- ║                                                                            ║
 -- ║  ── 字体 ──                                                                ║
 -- ║  Ctrl+Shift+=          放大字体                                            ║
@@ -212,7 +212,7 @@ config.webgpu_power_preference = 'HighPerformance'
 -- 协议与功能开关
 -- ============================================================================
 
--- config.enable_kitty_graphics = true
+config.enable_kitty_graphics = true
 config.window_close_confirmation = 'NeverPrompt'
 config.skip_close_confirmation_for_processes_named = {
   'bash', 'zsh', 'fish', 'pwsh', 'powershell', 'cmd', 'nu',
