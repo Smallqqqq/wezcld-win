@@ -59,7 +59,7 @@
 local wezterm = require 'wezterm'
 local config = wezterm.config_builder()
 local act = wezterm.action
-
+local mux = wezterm.mux
 
 -- ==================== 插件引入 ====================
 ------------------------------------------------------
@@ -97,6 +97,8 @@ local ssh_map = {
   { pattern = "server97",               args = { "ssh", "server97" } },
   { pattern = "lhep-webserver07",       args = { "ssh", "lhep-webserver07" } },
   { pattern = "lhep-webserver13",       args = { "ssh", "lhep-webserver13" } },
+  { pattern = "lhep-webserver11",       args = { "ssh", "prod" } },
+  { pattern = "lhep-tools04",           args = { "ssh", "test" } },
 }
 
 
@@ -266,14 +268,14 @@ config.keys = {
     mods = 'CTRL|SHIFT',
     action = wezterm.action_callback(function(window, pane)
       local _, args = detect_env(pane)
-      local cwd = pane:get_current_working_dir().file_path
-      wezterm.log_info('cwd path = ' .. tostring(cwd))
-      if args then
-        pane:split({ direction = 'Right', args = args, cwd = cwd })
-      else
-        -- args 为 nil 时使用域默认 shell
-        window:perform_action(act.SplitPane { direction = 'Right' }, pane)
-      end
+      local cwd_url = pane:get_current_working_dir()
+      local cwd = cwd_url and cwd_url.file_path or nil
+      local domain = pane:get_domain_name()
+      wezterm.log_info('split right: cwd=' .. tostring(cwd) .. ' domain=' .. tostring(domain))
+      local opts = { direction = 'Right', domain = { DomainName = domain } }
+      if args then opts.args = args end
+      if cwd then opts.cwd = cwd end
+      pane:split(opts)
     end),
   },
   {
@@ -281,12 +283,13 @@ config.keys = {
     mods = 'CTRL|SHIFT',
     action = wezterm.action_callback(function(window, pane)
       local _, args = detect_env(pane)
-      local cwd = pane:get_current_working_dir().file_path
-      if args then
-        pane:split({ direction = 'Down', args = args, cwd = cwd })
-      else
-        window:perform_action(act.SplitPane { direction = 'Down' }, pane)
-      end
+      local cwd_url = pane:get_current_working_dir()
+      local cwd = cwd_url and cwd_url.file_path or nil
+      local domain = pane:get_domain_name()
+      local opts = { direction = 'Bottom', domain = { DomainName = domain } }
+      if args then opts.args = args end
+      if cwd then opts.cwd = cwd end
+      pane:split(opts)
     end),
   },
   { key = 'x', mods = 'CTRL|SHIFT', action = act.CloseCurrentPane { confirm = false } },
@@ -486,6 +489,50 @@ config.mouse_bindings = {
 }
 
 -- ============================================================================
+-- 事件：自定义标签标题 —— 项目名: 进程名
+-- ============================================================================
+
+--- 从 CWD URL 提取最后一级目录名
+local function dir_name_from_url(url)
+  if not url or not url.file_path then return nil end
+  local path = url.file_path
+  path = path:gsub('^/([A-Za-z]:)', '%1')  -- /C: → C:
+  path = path:gsub('[\\/]+$', '')
+  return path:match('([^/\\]+)$')
+end
+
+--- 从进程名去掉 .exe 后缀，取短名
+local function short_process(name)
+  if not name then return '' end
+  name = name:match('([^/\\]+)$') or name  -- 只取文件名
+  name = name:gsub('%.exe$', '')
+  return name
+end
+
+wezterm.on('format-tab-title', function(tab)
+  local pane = tab.active_pane
+  local title = pane.title or ''
+  local proc = short_process(pane.foreground_process_name)
+  local project = dir_name_from_url(pane.current_working_dir)
+
+  -- 构建显示标题
+  local display
+  if title:find('@') then
+    -- SSH 等 user@host 窗口，保留原始标题
+    display = title
+  elseif title:lower():find('claude') then
+    display = (project or '') .. ': 🤖claude'
+  elseif project then
+    display = project .. ': ' .. proc
+  else
+    display = proc ~= '' and proc or title
+  end
+
+  -- 加上标签序号
+  return (tab.tab_index + 1) .. ' ' .. display
+end)
+
+-- ============================================================================
 -- 事件：Bell 通知 (Claude Code完成后进行通知)
 -- ============================================================================
 
@@ -521,16 +568,17 @@ end)
 
 
 -- ============================================================================
--- 事件：启动时窗口居中
+-- 事件：新窗口创建时居中
 -- ============================================================================
-
-wezterm.on('gui-startup', function(cmd)
-  -- 窗口居中
+wezterm.on('window-created', function(window)
   local screen = wezterm.gui.screens().main
   local w, h = 1000, 600
-  local _, _, window = wezterm.mux.spawn_window(cmd or {})
-  window:gui_window():set_position(screen.width / 2 - w / 2, screen.height / 2 - h / 2)
-  window:gui_window():set_inner_size(w, h)
+
+  local gui = window:gui_window()
+  if gui then
+    gui:set_position(screen.width / 2 - w / 2, screen.height / 2 - h / 2)
+    gui:set_inner_size(w, h)
+  end
 end)
 
 return config
