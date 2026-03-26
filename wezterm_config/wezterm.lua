@@ -6,15 +6,21 @@
 -- ║  【快捷键一览】                                                            ║
 -- ║  Ctrl+Shift+O          启动Claude Code                                 ║
 -- ║  Ctrl+Shift+P          启动wezcld （需配置wezcld）                                ║
+-- ║  Ctrl+Shift+I          当前窗格运行 WSL+Claude                              ║
+-- ║  Ctrl+Shift+U          打开 WinSCP 连接当前 SSH 会话                        ║
 -- ║                                                                            ║
 -- ║  ── 标签页管理 ──                                                          ║
 -- ║  Ctrl+Shift+T          新建标签页                                          ║
--- ║  Ctrl+Shift+W          关闭当前标签页                                      ║
+-- ║  Ctrl+Shift+W          新建窗口                                            ║
+-- ║  Ctrl+Shift+I          当前目录运行 WSL+Claude                             ║
 -- ║  Ctrl+Shift+Tab        切换到上一个标签页                                  ║
+-- ║  Ctrl+Shift+←/→        切换上一个/下一个标签页                             ║
+-- ║  Ctrl+Shift+Alt+←/→    移动标签页顺序                                      ║
 -- ║  Ctrl+Shift+1~9        切换到第 1~9 个标签页                               ║
 -- ║                                                                            ║
 -- ║  ── 窗格(分屏)管理 ──                                                     ║
--- ║  Ctrl+Shift+E          水平分屏(向右)                                      ║
+-- ║  Ctrl+Shift+E          水平分屏(向右，继承当前环境)                        ║
+-- ║  Ctrl+Shift+R          水平分屏(向右，弹出菜单选择环境)                    ║
 -- ║  Ctrl+Shift+D          垂直分屏(向下)                                      ║
 -- ║  Ctrl+Shift+X          关闭当前窗格                                        ║
 -- ║  Alt+H/J/K/L           窗格导航(左/下/上/右)                               ║
@@ -22,7 +28,8 @@
 -- ║  Ctrl+Alt+方向键       调整窗格大小                                        ║
 -- ║                                                                            ║
 -- ║  ── 文本操作 ──                                                            ║
--- ║  Ctrl+Shift+C          有选区则复制             ║
+-- ║  Ctrl+Shift+Z          撤回命令行输入(readline undo / Ctrl+_)              ║
+-- ║  Ctrl+Shift+C          有选区则复制                                        ║
 -- ║  Ctrl+Shift+V          粘贴剪贴板                                          ║
 -- ║  Ctrl+Shift+F          搜索                                                ║
 -- ║  Ctrl+Shift+K          清屏(清除回滚缓冲区)                                ║
@@ -72,8 +79,8 @@ config.launch_menu = {
   -- ── 远程 SSH ──
   { label = "L46-正式worker",    args = { "ssh", "l46-codescan-ali-01" } },
   { label = "L50-正式代码管理",  args = { "ssh", "l50-test-office-misc-1" } },
-  { label = "测试-jenkins",      args = { "ssh", "lhep-test1" } },
-  { label = "测试-worker",       args = { "ssh", "server97" } },
+  { label = "测试-jenkins",      args = { "ssh", "-t", "lhep-test1", "cd '/srv/jenkins/workspace/代码管理平台/初始化环境' && exec $SHELL" } },
+  { label = "测试-worker",       args = { "ssh", "-t", "server97", "sudo su - gzhao" } },
   { label = "正式-代码管理平台", args = { "ssh", "lhep-webserver07" } },
   { label = "正式-番茄",         args = { "ssh", "lhep-webserver13" } },
   { label = "正式环境26(普通SSH)", args = { "ssh", "prod" } },
@@ -83,10 +90,11 @@ config.launch_menu = {
   { label = 'PowerShell',           args = { 'powershell.exe' } },
   { label = 'Git Bash', args = { 'D:\\Program Files\\Git\\bin\\bash.exe', '-l' } },
   { label = "ai-chat",              args = { "aichat" } },
-  { label = "代码管理",             args = { "powershell.exe", "-NoExit", "-Command", "cd 'D:\\PycharmProjects\\code_platform'; & '.venv\\Scripts\\Activate.ps1'" } },
-  { label = "代码管理Worker",       args = { "powershell.exe", "-NoExit", "-Command", "cd 'D:\\PycharmProjects\\code_platform_worker'; & '.venv\\Scripts\\Activate.ps1'" } },
-  { label = "商业化排期",           args = { "powershell.exe", "-NoExit", "-Command", "cd 'D:\\Projects\\business-schedule-backend'" } },
-  { label = "代码扫描",             args = { "powershell.exe", "-NoExit", "-Command", "cd 'D:\\Projects\\code-analysis-web'" } },
+  { label = "项目：代码管理平台",             args = { "powershell.exe", "-NoExit", "-Command", "cd 'D:\\PycharmProjects\\code_platform'; & '.venv\\Scripts\\Activate.ps1'" } },
+  { label = "项目：代码管理Worker",       args = { "powershell.exe", "-NoExit", "-Command", "cd 'D:\\PycharmProjects\\code_platform_worker'; & '.venv\\Scripts\\Activate.ps1'" } },
+  { label = "项目：商业化排期",           args = { "powershell.exe", "-NoExit", "-Command", "cd 'D:\\Projects\\business-schedule-backend'" } },
+  { label = "项目：代码扫描平台",             args = { "powershell.exe", "-NoExit", "-Command", "cd 'D:\\Projects\\code-analysis-web'" } },
+  { label = "项目：Python脚本",       args = { "powershell.exe", "-NoExit", "-Command", "cd 'D:\\PycharmProjects\\pythonProject'" } },
 }
 
 -- 匹配你的ssh 窗格title，然后返回对应的启动参数和标签名，方便分屏和标签展示
@@ -130,6 +138,7 @@ local function detect_env(pane)
   if     t:find("bash")       then return "gitbash",    { 'D:\\Program Files\\Git\\bin\\bash.exe', '-l' }
   elseif t:find("mingw")      then return "gitbash",    { 'D:\\Program Files\\Git\\bin\\bash.exe', '-l' }
   elseif t:find("@hih")       then return "ssh",        { 'wsl.exe' }
+  elseif t:find("wsl")       then return "ssh",        { 'wsl.exe' }
   elseif t:find("powershell") then return "powershell", { 'powershell.exe' }
   elseif t:find("cmd")        then return "cmd",        { 'cmd.exe' }
   elseif t:find("@")          then return "ssh",        nil
@@ -252,8 +261,12 @@ config.keys = {
 
   -- ── 标签页管理 ──
   { key = 't',   mods = 'CTRL|SHIFT', action = act.SpawnTab 'CurrentPaneDomain' },
-  { key = 'w',   mods = 'CTRL|SHIFT', action = act.CloseCurrentTab { confirm = false } },
+  { key = 'w',   mods = 'CTRL|SHIFT', action = act.SpawnWindow },
   { key = 'Tab', mods = 'CTRL|SHIFT', action = act.ActivateTabRelative(-1) },
+  { key = 'LeftArrow',  mods = 'CTRL|SHIFT', action = act.ActivateTabRelative(-1) },
+  { key = 'RightArrow', mods = 'CTRL|SHIFT', action = act.ActivateTabRelative(1) },
+  { key = 'LeftArrow',  mods = 'CTRL|SHIFT|ALT', action = act.MoveTabRelative(-1) },
+  { key = 'RightArrow', mods = 'CTRL|SHIFT|ALT', action = act.MoveTabRelative(1) },
   { key = '1',   mods = 'CTRL|SHIFT', action = act.ActivateTab(0) },
   { key = '2',   mods = 'CTRL|SHIFT', action = act.ActivateTab(1) },
   { key = '3',   mods = 'CTRL|SHIFT', action = act.ActivateTab(2) },
@@ -278,6 +291,36 @@ config.keys = {
       if args then opts.args = args end
       if cwd then opts.cwd = cwd end
       pane:split(opts)
+    end),
+  },
+  -- Ctrl+Shift+R: 向右分屏并弹出菜单选择环境
+  {
+    key = 'r',
+    mods = 'CTRL|SHIFT',
+    action = wezterm.action_callback(function(window, pane)
+      local choices = {}
+      for i, item in ipairs(config.launch_menu) do
+        table.insert(choices, { label = item.label, id = tostring(i) })
+      end
+      window:perform_action(
+        act.InputSelector {
+          action = wezterm.action_callback(function(win, p, id, label)
+            if not id then return end
+            local idx = tonumber(id)
+            local item = config.launch_menu[idx]
+            if not item then return end
+            local cwd_url = p:get_current_working_dir()
+            local cwd = cwd_url and cwd_url.file_path or nil
+            local opts = { direction = 'Right', args = item.args }
+            if cwd then opts.cwd = cwd end
+            p:split(opts)
+          end),
+          title = '向右分屏 — 选择环境',
+          choices = choices,
+          fuzzy = true,
+        },
+        pane
+      )
     end),
   },
   {
@@ -313,6 +356,9 @@ config.keys = {
   { key = 'DownArrow',  mods = 'CTRL|ALT', action = act.AdjustPaneSize { 'Down', 5 } },
 
   -- ── 文本操作（复制/粘贴/搜索/清屏/滚动） ──
+
+  -- Ctrl+Shift+Z: 撤回命令行输入（发送 readline undo: Ctrl+_）
+  { key = 'z', mods = 'CTRL|SHIFT', action = act.SendKey { key = '_', mods = 'CTRL' } },
 
   -- Ctrl+Shift+C: 有选区 → 复制
   {
@@ -365,6 +411,34 @@ config.keys = {
       act.SendString('wezcld'),
       act.SendKey({ key = 'Enter' }),
   })},
+
+  -- Ctrl+Shift+I: 在当前窗格用 WSL 运行 claude
+  { key = 'i', mods = 'CTRL|SHIFT', action = act.Multiple({
+      act.SendString('wsl bash -i -c claude'),
+      act.SendKey({ key = 'Enter' }),
+  })},
+
+  -- Ctrl+Shift+U: 打开 WinSCP 连接到当前 SSH 会话对应的服务器
+  {
+    key = 'u',
+    mods = 'CTRL|SHIFT',
+    action = wezterm.action_callback(function(window, pane)
+      local title = pane:get_title() or ""
+      local host = nil
+      for _, m in ipairs(ssh_map) do
+        if title:find(m.pattern, 1, true) then
+          host = m.args[2]  -- SSH alias，如 "prod"、"server97"
+          break
+        end
+      end
+      local winscp = 'D:\\Program Files (x86)\\WinSCP\\WinSCP.exe'
+      if host then
+        wezterm.run_child_process({ winscp, 'sftp://' .. host })
+      else
+        wezterm.run_child_process({ winscp })
+      end
+    end),
+  },
 
   -- ── AI Chat 集成 (需安装 aichat) ──
 
